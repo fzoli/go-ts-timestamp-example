@@ -11,7 +11,13 @@ import (
 	"log"
 )
 
+const (
+	bufferSize = 1316 // SRT MPEG-TS buffer size
+)
+
 func main() {
+	go testServer()
+	
 	transport := gortsplib.TransportTCP
 	c := gortsplib.Client{
 		Transport: &transport,
@@ -89,9 +95,11 @@ func main() {
 			// Lazily so the server will not close the connection before the first packet arrives
 			config := srt.DefaultConfig()
 			config.StreamId = "publish:target"
-			// config.Passphrase = "AES-encryption-passphrase" // mediamtx does not support encrypted SRT stream, yet
+			config.Passphrase = "AES-encryption-passphrase"
+			config.SendBufferSize = bufferSize
+			config.ReceiverBufferSize = bufferSize
 
-			conn, err := srt.Dial("srt", "127.0.0.1:8890", config)
+			conn, err := srt.Dial("srt", "127.0.0.1:6000", config)
 			if err != nil {
 				panic(err)
 			}
@@ -99,7 +107,7 @@ func main() {
 				vps: forma.VPS,
 				sps: forma.SPS,
 				pps: forma.PPS,
-				b:   bufio.NewWriterSize(conn, 188),
+				b:   bufio.NewWriterSize(conn, bufferSize),
 			}
 
 			err = muxer.initialize()
