@@ -1,0 +1,15 @@
+paths:
+  # Source H265 RTSP stream read by Go app.
+  h265src:
+    runOnInit: ffmpeg -re -stream_loop -1 -i /config/video.h265.mp4 -c copy -f rtsp rtsp://localhost:8554/h265src
+    runOnInitRestart: yes
+
+  # Destination stream. Published by Go app via SRT.
+  # Play it via:
+  # - RTSP: ffplay "rtsp://localhost:8554/target" "-fflags" "nobuffer" "-probesize" "32" "-analyzeduration" "0"
+  # - SRT:  ffplay "srt://localhost:8890?streamid=read:target" "-fflags" "nobuffer" "-probesize" "32" "-analyzeduration" "0"
+  # The playback will not be complete before the first key frame. This is not an error.
+  # You can validate the Go app with an alternative solution:
+  # ffmpeg -i "rtsp://localhost:8554/h265src" -rtsp_transport tcp -c copy "srt://localhost:8890?streamid=publish:target"
+  target:
+    source: publisher

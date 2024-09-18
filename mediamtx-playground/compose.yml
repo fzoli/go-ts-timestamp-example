@@ -1,0 +1,11 @@
+name: mediamtx-playground
+services:
+  mediamtx:
+    image: bluenviron/mediamtx:1.4.2-ffmpeg
+    restart: always
+    volumes:
+      - ./config:/config:ro
+    ports:
+      - "8554:8554/tcp" # rtsp
+      - "8890:8890/udp" # srt
+    entrypoint: ["/mediamtx", "/config/mediamtx.yml"]
