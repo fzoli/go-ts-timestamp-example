@@ -62,7 +62,7 @@ func isPublish(req srt.ConnRequest) bool {
 }
 
 func handlePublish(conn srt.Conn) {
-	cmd := exec.Command("ffplay", "-i", "pipe:0", "-fflags", "nobuffer", "-probesize", "32", "-analyzeduration", "0")
+	cmd := exec.Command("ffplay", "-i", "pipe:0", "-probesize", "32", "-analyzeduration", "0")
 	ffplayIn, err := cmd.StdinPipe()
 	if err != nil {
 		log.Fatalf("Failed to create stdin pipe: %v", err)

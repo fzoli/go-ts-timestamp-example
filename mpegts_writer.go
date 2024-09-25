@@ -139,6 +139,7 @@ func (w *TsWriter) WriteH265WithTimestamp(
 		MarkerBits: 2,
 	}
 
+	oh.HasExtension = true
 	oh.HasPrivateData = true
 	// (1)version + (8)timestamp
 	oh.PrivateData = make([]byte, 9)

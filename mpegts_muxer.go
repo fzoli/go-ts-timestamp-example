@@ -72,6 +72,7 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 	au = filteredAU
 
 	if au == nil {
+		log.Printf("Nil AU")
 		return nil
 	}
 
@@ -85,6 +86,7 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 	if e.dtsExtractor == nil {
 		// skip samples silently until we find one with a IDR
 		if !isRandomAccess {
+			log.Printf("Do not send noise")
 			return nil
 		}
 		e.dtsExtractor = h265.NewDTSExtractor()
