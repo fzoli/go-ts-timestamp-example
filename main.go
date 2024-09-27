@@ -89,7 +89,7 @@ func main() {
 			// Lazily so the server will not close the connection before the first packet arrives
 			config := srt.DefaultConfig()
 			config.StreamId = "publish:target"
-			// config.Passphrase = "AES-encryption-passphrase" // mediamtx does not support encrypted SRT stream, yet
+			config.Passphrase = "1234567890"
 
 			conn, err := srt.Dial("srt", "127.0.0.1:8890", config)
 			if err != nil {

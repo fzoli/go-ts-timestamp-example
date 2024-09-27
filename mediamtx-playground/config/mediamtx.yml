@@ -10,6 +10,7 @@ paths:
   # - SRT:  ffplay "srt://localhost:8890?streamid=read:target" "-fflags" "nobuffer" "-probesize" "32" "-analyzeduration" "0"
   # The playback will not be complete before the first key frame. This is not an error.
   # You can validate the Go app with an alternative solution:
-  # ffmpeg -i "rtsp://localhost:8554/h265src" -rtsp_transport tcp -c copy "srt://localhost:8890?streamid=publish:target"
+  # ffmpeg -i "rtsp://localhost:8554/h265src" -rtsp_transport tcp -c copy -f mpegts "srt://localhost:8890?streamid=publish:target&passphrase=1234567890&pbkeylen=16"
   target:
     source: publisher
+    srtPublishPassphrase: "1234567890"
