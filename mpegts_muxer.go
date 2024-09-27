@@ -22,6 +22,7 @@ type mpegtsMuxer struct {
 	w            *TsWriter
 	track        *TsTrack
 	dtsExtractor *h265.DTSExtractor
+	fresh        bool
 }
 
 // initialize initializes a mpegtsMuxer.
@@ -30,6 +31,7 @@ func (e *mpegtsMuxer) initialize() error {
 		Codec: &TsCodecH265{},
 	}
 	e.w = NewTsWriter(e.b, []*TsTrack{e.track})
+	e.fresh = true
 	return nil
 }
 
@@ -101,14 +103,17 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 	mpegPts := durationGoToMPEGTS(pts)
 	mpegDts := durationGoToMPEGTS(dts)
 
+	fresh := e.fresh
+	e.fresh = false
+
 	if isRandomAccess {
 		packetTime := ntp
 		if !hasNtp {
 			packetTime = time.Now() // fallback to receiver system time
 		}
-		log.Printf("Write TS packet with pts=%d dts=%d time=%d", mpegPts, mpegDts, packetTime.UnixMilli())
-		return e.w.WriteH265WithTimestamp(e.track, mpegPts, mpegDts, isRandomAccess, au, packetTime)
+		log.Printf("Write TS packet with pts=%d dts=%d time=%d fresh=%t", mpegPts, mpegDts, packetTime.UnixMilli(), fresh)
+		return e.w.WriteH265WithTimestamp(e.track, mpegPts, mpegDts, isRandomAccess, fresh, au, packetTime)
 	} else {
-		return e.w.WriteH265(e.track, mpegPts, mpegDts, isRandomAccess, au)
+		return e.w.WriteH265(e.track, mpegPts, mpegDts, isRandomAccess, fresh, au)
 	}
 }

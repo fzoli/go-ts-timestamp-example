@@ -92,6 +92,7 @@ func (w *TsWriter) WriteH265(
 	pts int64,
 	dts int64,
 	randomAccess bool,
+	discontinuity bool,
 	au [][]byte,
 ) error {
 	// prepend an AUD. This is required by video.js, iOS, QuickTime
@@ -110,7 +111,7 @@ func (w *TsWriter) WriteH265(
 		MarkerBits: 2,
 	}
 
-	return w.writeVideo(track, pts, dts, randomAccess, enc, oh)
+	return w.writeVideo(track, pts, dts, randomAccess, discontinuity, enc, oh)
 }
 
 // WriteH265WithTimestamp writes a H265 access unit into MPEG-TS with a custom timestamp.
@@ -119,6 +120,7 @@ func (w *TsWriter) WriteH265WithTimestamp(
 	pts int64,
 	dts int64,
 	randomAccess bool,
+	discontinuity bool,
 	au [][]byte,
 	time time.Time,
 ) error {
@@ -153,7 +155,7 @@ func (w *TsWriter) WriteH265WithTimestamp(
 	}
 
 	// Write the video data with the custom PES header
-	return w.writeVideo(track, pts, dts, randomAccess, enc, oh)
+	return w.writeVideo(track, pts, dts, randomAccess, discontinuity, enc, oh)
 }
 
 func (w *TsWriter) writeVideo(
@@ -161,6 +163,7 @@ func (w *TsWriter) writeVideo(
 	pts int64,
 	dts int64,
 	randomAccess bool,
+	discontinuity bool,
 	data []byte,
 	oh *astits.PESOptionalHeader,
 ) error {
@@ -175,6 +178,13 @@ func (w *TsWriter) writeVideo(
 	if randomAccess {
 		af = &astits.PacketAdaptationField{}
 		af.RandomAccessIndicator = true
+	}
+
+	if discontinuity {
+		if af == nil {
+			af = &astits.PacketAdaptationField{}
+		}
+		af.DiscontinuityIndicator = true
 	}
 
 	if track.isLeading {
