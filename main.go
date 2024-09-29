@@ -6,6 +6,7 @@ import (
 	"github.com/bluenviron/gortsplib/v4/pkg/base"
 	"github.com/bluenviron/gortsplib/v4/pkg/format"
 	"github.com/bluenviron/gortsplib/v4/pkg/format/rtph265"
+	"github.com/bluenviron/mediacommon/pkg/codecs/h265"
 	srt "github.com/datarhei/gosrt"
 	"github.com/pion/rtp"
 	"log"
@@ -17,7 +18,7 @@ const (
 
 func main() {
 	go testServer()
-	
+
 	transport := gortsplib.TransportTCP
 	c := gortsplib.Client{
 		Transport: &transport,
@@ -108,6 +109,15 @@ func main() {
 				sps: forma.SPS,
 				pps: forma.PPS,
 				b:   bufio.NewWriterSize(conn, bufferSize),
+			}
+
+			var sps h265.SPS
+			spsErr := sps.Unmarshal(forma.SPS)
+			if spsErr == nil {
+				fps := sps.FPS()
+				width := sps.Width()
+				height := sps.Height()
+				log.Printf("Video width: %d height: %d fps: %f", width, height, fps)
 			}
 
 			err = muxer.initialize()
