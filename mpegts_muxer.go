@@ -42,7 +42,8 @@ func (e *mpegtsMuxer) close() {
 func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, hasNtp bool) error {
 	var filteredAU [][]byte
 
-	isRandomAccess := false
+	isIFrame := false
+	isIDRFrame := false
 
 	for _, nalu := range au {
 		typ := h265.NALUType((nalu[0] >> 1) & 0b111111)
@@ -62,8 +63,14 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 		case h265.NALUType_AUD_NUT:
 			continue
 
-		case h265.NALUType_IDR_W_RADL, h265.NALUType_IDR_N_LP, h265.NALUType_CRA_NUT:
-			isRandomAccess = true
+		case h265.NALUType_CRA_NUT:
+			// CRA is an I-frame, but not a random access point
+			isIFrame = true
+
+		case h265.NALUType_IDR_W_RADL, h265.NALUType_IDR_N_LP:
+			// IDR is both an I-frame and a random access point
+			isIFrame = true
+			isIDRFrame = true
 		}
 
 		filteredAU = append(filteredAU, nalu)
@@ -77,7 +84,7 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 	}
 
 	// add VPS, SPS and PPS before random access access unit
-	if isRandomAccess {
+	if isIFrame {
 		au = append([][]byte{e.vps, e.sps, e.pps}, au...)
 	}
 
@@ -85,7 +92,7 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 
 	if e.dtsExtractor == nil {
 		// skip samples silently until we find one with a IDR
-		if !isRandomAccess {
+		if !isIFrame {
 			log.Printf("Do not send noise")
 			return nil
 		}
@@ -101,14 +108,22 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 	mpegPts := durationGoToMPEGTS(pts)
 	mpegDts := durationGoToMPEGTS(dts)
 
-	if isRandomAccess {
+	frameType := ""
+	if isIDRFrame {
+		frameType = "[IDR]"
+	} else if isIFrame {
+		frameType = "[I]"
+	}
+
+	if isIFrame {
 		packetTime := ntp
 		if !hasNtp {
 			packetTime = time.Now() // fallback to receiver system time
 		}
-		log.Printf("Write TS packet with pts=%d dts=%d time=%d", mpegPts, mpegDts, packetTime.UnixMilli())
-		return e.w.WriteH265WithTimestamp(e.track, mpegPts, mpegDts, isRandomAccess, au, packetTime)
+		log.Printf("Write TS packet with pts=%d dts=%d time=%d %s", mpegPts, mpegDts, packetTime.UnixMilli(), frameType)
+		return e.w.WriteH265WithTimestamp(e.track, mpegPts, mpegDts, isIDRFrame, au, packetTime)
 	} else {
-		return e.w.WriteH265(e.track, mpegPts, mpegDts, isRandomAccess, au)
+		log.Printf("Write TS packet with pts=%d dts=%d %s", mpegPts, mpegDts, frameType)
+		return e.w.WriteH265(e.track, mpegPts, mpegDts, isIDRFrame, au)
 	}
 }
