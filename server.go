@@ -5,9 +5,12 @@ import (
 	"io"
 	"log"
 	"os/exec"
+	"sync"
 )
 
-func testServer() {
+func testServer(wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	cfg := srt.DefaultConfig()
 	cfg.SendBufferSize = bufferSize
 	cfg.ReceiverBufferSize = bufferSize

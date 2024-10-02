@@ -10,6 +10,7 @@ import (
 	srt "github.com/datarhei/gosrt"
 	"github.com/pion/rtp"
 	"log"
+	"sync"
 )
 
 const (
@@ -17,8 +18,14 @@ const (
 )
 
 func main() {
-	go testServer()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go testServer(&wg)
+	defer wg.Wait()
+	go testClient()
+}
 
+func testClient() {
 	transport := gortsplib.TransportTCP
 	c := gortsplib.Client{
 		Transport: &transport,

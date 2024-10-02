@@ -61,10 +61,11 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 			continue
 
 		case h265.NALUType_AUD_NUT:
+			// ignore (will prepend later)
 			continue
 
-		case h265.NALUType_CRA_NUT:
-			// CRA is an I-frame, but not a random access point
+		case h265.NALUType_CRA_NUT, h265.NALUType_BLA_W_RADL, h265.NALUType_BLA_N_LP, h265.NALUType_BLA_W_LP:
+			// CRA (and BLA) is an I-frame, but not an IDR so not a "real" random access point (zero fault tolerance)
 			isIFrame = true
 
 		case h265.NALUType_IDR_W_RADL, h265.NALUType_IDR_N_LP:
