@@ -1,11 +1,12 @@
 package main
 
 import (
-	"bufio"
-	"log"
-	"time"
+    "bufio"
+    "log"
+    "time"
 
-	"github.com/bluenviron/mediacommon/pkg/codecs/h265"
+    "github.com/bluenviron/mediacommon/pkg/codecs/h264"
+    "github.com/bluenviron/mediacommon/pkg/codecs/h265"
 )
 
 func durationGoToMPEGTS(v time.Duration) int64 {
@@ -14,23 +15,30 @@ func durationGoToMPEGTS(v time.Duration) int64 {
 
 // mpegtsMuxer allows to save a H265 stream into a MPEG-TS file.
 type mpegtsMuxer struct {
-	vps []byte
-	sps []byte
-	pps []byte
+    vps []byte
+    sps []byte
+    pps []byte
 
-	b            *bufio.Writer
-	w            *TsWriter
-	track        *TsTrack
-	dtsExtractor *h265.DTSExtractor
+    b            *bufio.Writer
+    w            *TsWriter
+    track        *TsTrack
+    // codec selection
+    isH265 bool
+
+    // DTS extractors
+    dtsExtractor265 *h265.DTSExtractor
+    dtsExtractor264 *h264.DTSExtractor
 }
 
 // initialize initializes a mpegtsMuxer.
 func (e *mpegtsMuxer) initialize() error {
-	e.track = &TsTrack{
-		Codec: &TsCodecH265{},
-	}
-	e.w = NewTsWriter(e.b, []*TsTrack{e.track})
-	return nil
+    if e.isH265 {
+        e.track = &TsTrack{Codec: &TsCodecH265{}}
+    } else {
+        e.track = &TsTrack{Codec: &TsCodecH264{}}
+    }
+    e.w = NewTsWriter(e.b, []*TsTrack{e.track})
+    return nil
 }
 
 // close closes all the mpegtsMuxer resources.
@@ -90,17 +98,17 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 
 	var dts time.Duration
 
-	if e.dtsExtractor == nil {
+    if e.dtsExtractor265 == nil {
 		// skip samples silently until we find one with a IDR
 		if !isIFrame {
 			log.Printf("Do not send noise")
 			return nil
 		}
-		e.dtsExtractor = h265.NewDTSExtractor()
-	}
+        e.dtsExtractor265 = h265.NewDTSExtractor()
+    }
 
 	var err error
-	dts, err = e.dtsExtractor.Extract(au, pts)
+    dts, err = e.dtsExtractor265.Extract(au, pts)
 	if err != nil {
 		return err
 	}
@@ -126,4 +134,72 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 		log.Printf("Write TS packet with pts=%d dts=%d %s", mpegPts, mpegDts, frameType)
 		return e.w.WriteH265(e.track, mpegPts, mpegDts, isIDRFrame, au)
 	}
+}
+
+// writeH264 writes a H264 access unit into MPEG-TS.
+func (e *mpegtsMuxer) writeH264(au [][]byte, pts time.Duration, ntp time.Time, hasNtp bool) error {
+    var filteredAU [][]byte
+
+    isIDRFrame := false
+
+    for _, nalu := range au {
+        typ := h264.NALUType(nalu[0] & 0x1F)
+        switch typ {
+        case h264.NALUTypeSPS:
+            e.sps = nalu
+            continue
+        case h264.NALUTypePPS:
+            e.pps = nalu
+            continue
+        case h264.NALUTypeAccessUnitDelimiter:
+            continue
+        case h264.NALUTypeIDR:
+            isIDRFrame = true
+        }
+        filteredAU = append(filteredAU, nalu)
+    }
+
+    au = filteredAU
+
+    if au == nil {
+        log.Printf("Nil AU")
+        return nil
+    }
+
+    // add SPS and PPS before IDR access unit
+    if isIDRFrame {
+        au = append([][]byte{e.sps, e.pps}, au...)
+    }
+
+    var dts time.Duration
+
+    if e.dtsExtractor264 == nil {
+        // skip samples silently until we find one with an IDR
+        if !isIDRFrame {
+            log.Printf("Do not send noise")
+            return nil
+        }
+        e.dtsExtractor264 = h264.NewDTSExtractor()
+    }
+
+    var err error
+    dts, err = e.dtsExtractor264.Extract(au, pts)
+    if err != nil {
+        return err
+    }
+
+    mpegPts := durationGoToMPEGTS(pts)
+    mpegDts := durationGoToMPEGTS(dts)
+
+    if isIDRFrame {
+        packetTime := ntp
+        if !hasNtp {
+            packetTime = time.Now() // fallback to receiver system time
+        }
+        log.Printf("Write TS packet with pts=%d dts=%d time=%d [IDR-H264]", mpegPts, mpegDts, packetTime.UnixMilli())
+        return e.w.WriteH264WithTimestamp(e.track, mpegPts, mpegDts, true, au, packetTime)
+    } else {
+        log.Printf("Write TS packet with pts=%d dts=%d [H264]", mpegPts, mpegDts)
+        return e.w.WriteH264(e.track, mpegPts, mpegDts, false, au)
+    }
 }

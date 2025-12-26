@@ -71,7 +71,7 @@ type TsTrack struct {
 }
 
 type TsCodec interface {
-	marshal(pid uint16) (*astits.PMTElementaryStream, error)
+    marshal(pid uint16) (*astits.PMTElementaryStream, error)
 }
 
 // TsCodecH265 is a H265 codec.
@@ -84,8 +84,18 @@ func (c TsCodecH265) marshal(pid uint16) (*astits.PMTElementaryStream, error) {
 	}, nil
 }
 
+// TsCodecH264 is a H264 codec.
+type TsCodecH264 struct{}
+
+func (c TsCodecH264) marshal(pid uint16) (*astits.PMTElementaryStream, error) {
+    return &astits.PMTElementaryStream{
+        ElementaryPID: pid,
+        StreamType:    astits.StreamTypeH264Video,
+    }, nil
+}
+
 func (t *TsTrack) marshal() (*astits.PMTElementaryStream, error) {
-	return t.Codec.marshal(t.PID)
+    return t.Codec.marshal(t.PID)
 }
 
 func (w *TsWriter) WriteH265(
@@ -155,6 +165,77 @@ func (w *TsWriter) WriteH265WithTimestamp(
 
 	// Write the video data with the custom PES header
 	return w.writeVideo(track, pts, dts, randomAccess, enc, oh)
+}
+
+// WriteH264 writes a H264 access unit into MPEG-TS.
+func (w *TsWriter) WriteH264(
+    track *TsTrack,
+    pts int64,
+    dts int64,
+    randomAccess bool,
+    au [][]byte,
+) error {
+    // prepend an AUD. This is required by video.js, iOS, QuickTime
+    // H264 AUD NAL header is 0x09, payload commonly 0xF0 (primary_pic_type = 7)
+    if au[0][0]&0x1F != 9 { // 9 == AUD
+        au = append([][]byte{
+            {0x09, 0xF0},
+        }, au...)
+    }
+
+    enc, err := h264.AnnexBMarshal(au)
+    if err != nil {
+        return err
+    }
+
+    oh := &astits.PESOptionalHeader{
+        MarkerBits: 2,
+    }
+
+    return w.writeVideo(track, pts, dts, randomAccess, enc, oh)
+}
+
+// WriteH264WithTimestamp writes a H264 access unit into MPEG-TS with a custom timestamp.
+func (w *TsWriter) WriteH264WithTimestamp(
+    track *TsTrack,
+    pts int64,
+    dts int64,
+    randomAccess bool,
+    au [][]byte,
+    time time.Time,
+) error {
+    // prepend an AUD. This is required by video.js, iOS, QuickTime
+    if au[0][0]&0x1F != 9 { // 9 == AUD
+        au = append([][]byte{
+            {0x09, 0xF0},
+        }, au...)
+    }
+
+    enc, err := h264.AnnexBMarshal(au)
+    if err != nil {
+        return err
+    }
+
+    // Include custom timestamp in the PES header for keyframes
+    oh := &astits.PESOptionalHeader{
+        MarkerBits: 2,
+    }
+
+    oh.HasExtension = true
+    oh.HasPrivateData = true
+    // (1)version + (8)timestamp
+    oh.PrivateData = make([]byte, 9)
+    // Set the version number in the first byte
+    oh.PrivateData[0] = privateDataVersion
+    // Fill the PrivateData field with the Unix timestamp (big-endian)
+    timestamp := time.UnixMilli()
+    for i := uint(0); i < 8; i++ {
+        idx := i + 1 // index after the version number
+        oh.PrivateData[idx] = byte((timestamp >> (8 * (7 - i))) & 0xFF)
+    }
+
+    // Write the video data with the custom PES header
+    return w.writeVideo(track, pts, dts, randomAccess, enc, oh)
 }
 
 func (w *TsWriter) writeVideo(
