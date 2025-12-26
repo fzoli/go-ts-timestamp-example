@@ -2,11 +2,12 @@ package main
 
 import (
 	"context"
+	"io"
+	"time"
+
 	"github.com/asticode/go-astits"
 	"github.com/bluenviron/mediacommon/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/pkg/codecs/h265"
-	"io"
-	"time"
 )
 
 const (

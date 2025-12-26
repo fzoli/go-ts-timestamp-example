@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"log"
+
 	"github.com/bluenviron/gortsplib/v4"
 	"github.com/bluenviron/gortsplib/v4/pkg/base"
 	"github.com/bluenviron/gortsplib/v4/pkg/format"
@@ -9,7 +11,6 @@ import (
 	"github.com/bluenviron/mediacommon/pkg/codecs/h265"
 	srt "github.com/datarhei/gosrt"
 	"github.com/pion/rtp"
-	"log"
 )
 
 const (

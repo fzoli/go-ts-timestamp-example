@@ -3,15 +3,16 @@ package main
 import (
 	"bufio"
 	"context"
+	"log"
+	"os"
+	"strconv"
+	"time"
+
 	"github.com/asticode/go-astits"
 	"github.com/bluenviron/mediacommon/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/pkg/codecs/h265"
 	"github.com/bluenviron/mediacommon/pkg/formats/mpegts"
 	srt "github.com/datarhei/gosrt"
-	"log"
-	"os"
-	"strconv"
-	"time"
 )
 
 func testServer() {
