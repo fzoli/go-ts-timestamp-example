@@ -1,12 +1,13 @@
 package main
 
 import (
-    "bufio"
-    "log"
-    "time"
+	"bufio"
+	"fmt"
+	"log"
+	"time"
 
-    "github.com/bluenviron/mediacommon/pkg/codecs/h264"
-    "github.com/bluenviron/mediacommon/pkg/codecs/h265"
+	"github.com/bluenviron/mediacommon/pkg/codecs/h264"
+	"github.com/bluenviron/mediacommon/pkg/codecs/h265"
 )
 
 func durationGoToMPEGTS(v time.Duration) int64 {
@@ -15,40 +16,41 @@ func durationGoToMPEGTS(v time.Duration) int64 {
 
 // mpegtsMuxer allows to save a H265 stream into a MPEG-TS file.
 type mpegtsMuxer struct {
-    vps []byte
-    sps []byte
-    pps []byte
+	vps []byte
+	sps []byte
+	pps []byte
 
-    b            *bufio.Writer
-    w            *TsWriter
-    track        *TsTrack
-    // codec selection
-    isH265 bool
+	b     *bufio.Writer
+	w     *TsWriter
+	track *TsTrack
+	// codec selection
+	isH265 bool
 
-    // DTS extractors
-    dtsExtractor265 *h265.DTSExtractor
-    dtsExtractor264 *h264.DTSExtractor
+	// DTS extractors
+	dtsExtractor265 *h265.DTSExtractor
+	dtsExtractor264 *h264.DTSExtractor
 
-    // audio
-    aTrack       *TsTrack
-    aacSampleHz  int
-    aacChannels  int
+	// audio
+	aTrack        *TsTrack
+	aacSampleHz   int
+	aacChannels   int
+	aacObjectType int
 }
 
 // initialize initializes a mpegtsMuxer.
 func (e *mpegtsMuxer) initialize() error {
-    if e.isH265 {
-        e.track = &TsTrack{Codec: &TsCodecH265{}}
-    } else {
-        e.track = &TsTrack{Codec: &TsCodecH264{}}
-    }
-    tracks := []*TsTrack{e.track}
-    if e.aacSampleHz > 0 && e.aacChannels > 0 {
-        e.aTrack = &TsTrack{Codec: &TsCodecAAC{}}
-        tracks = append(tracks, e.aTrack)
-    }
-    e.w = NewTsWriter(e.b, tracks)
-    return nil
+	if e.isH265 {
+		e.track = &TsTrack{Codec: &TsCodecH265{}}
+	} else {
+		e.track = &TsTrack{Codec: &TsCodecH264{}}
+	}
+	tracks := []*TsTrack{e.track}
+	if e.aacSampleHz > 0 && e.aacChannels > 0 {
+		e.aTrack = &TsTrack{Codec: &TsCodecAAC{}}
+		tracks = append(tracks, e.aTrack)
+	}
+	e.w = NewTsWriter(e.b, tracks)
+	return nil
 }
 
 // close closes all the mpegtsMuxer resources.
@@ -108,17 +110,17 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 
 	var dts time.Duration
 
-    if e.dtsExtractor265 == nil {
+	if e.dtsExtractor265 == nil {
 		// skip samples silently until we find one with a IDR
 		if !isIFrame {
 			log.Printf("Do not send noise")
 			return nil
 		}
-        e.dtsExtractor265 = h265.NewDTSExtractor()
-    }
+		e.dtsExtractor265 = h265.NewDTSExtractor()
+	}
 
 	var err error
-    dts, err = e.dtsExtractor265.Extract(au, pts)
+	dts, err = e.dtsExtractor265.Extract(au, pts)
 	if err != nil {
 		return err
 	}
@@ -148,126 +150,147 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 
 // writeH264 writes a H264 access unit into MPEG-TS.
 func (e *mpegtsMuxer) writeH264(au [][]byte, pts time.Duration, ntp time.Time, hasNtp bool) error {
-    var filteredAU [][]byte
+	var filteredAU [][]byte
 
-    isIDRFrame := false
+	isIDRFrame := false
 
-    for _, nalu := range au {
-        typ := h264.NALUType(nalu[0] & 0x1F)
-        switch typ {
-        case h264.NALUTypeSPS:
-            e.sps = nalu
-            continue
-        case h264.NALUTypePPS:
-            e.pps = nalu
-            continue
-        case h264.NALUTypeAccessUnitDelimiter:
-            continue
-        case h264.NALUTypeIDR:
-            isIDRFrame = true
-        }
-        filteredAU = append(filteredAU, nalu)
-    }
+	for _, nalu := range au {
+		typ := h264.NALUType(nalu[0] & 0x1F)
+		switch typ {
+		case h264.NALUTypeSPS:
+			e.sps = nalu
+			continue
+		case h264.NALUTypePPS:
+			e.pps = nalu
+			continue
+		case h264.NALUTypeAccessUnitDelimiter:
+			continue
+		case h264.NALUTypeIDR:
+			isIDRFrame = true
+		}
+		filteredAU = append(filteredAU, nalu)
+	}
 
-    au = filteredAU
+	au = filteredAU
 
-    if au == nil {
-        log.Printf("Nil AU")
-        return nil
-    }
+	if au == nil {
+		log.Printf("Nil AU")
+		return nil
+	}
 
-    // add SPS and PPS before IDR access unit
-    if isIDRFrame {
-        au = append([][]byte{e.sps, e.pps}, au...)
-    }
+	// add SPS and PPS before IDR access unit
+	if isIDRFrame {
+		au = append([][]byte{e.sps, e.pps}, au...)
+	}
 
-    var dts time.Duration
+	var dts time.Duration
 
-    if e.dtsExtractor264 == nil {
-        // skip samples silently until we find one with an IDR
-        if !isIDRFrame {
-            log.Printf("Do not send noise")
-            return nil
-        }
-        e.dtsExtractor264 = h264.NewDTSExtractor()
-    }
+	if e.dtsExtractor264 == nil {
+		// skip samples silently until we find one with an IDR
+		if !isIDRFrame {
+			log.Printf("Do not send noise")
+			return nil
+		}
+		e.dtsExtractor264 = h264.NewDTSExtractor()
+	}
 
-    var err error
-    dts, err = e.dtsExtractor264.Extract(au, pts)
-    if err != nil {
-        return err
-    }
+	var err error
+	dts, err = e.dtsExtractor264.Extract(au, pts)
+	if err != nil {
+		return err
+	}
 
-    mpegPts := durationGoToMPEGTS(pts)
-    mpegDts := durationGoToMPEGTS(dts)
+	mpegPts := durationGoToMPEGTS(pts)
+	mpegDts := durationGoToMPEGTS(dts)
 
-    if isIDRFrame {
-        packetTime := ntp
-        if !hasNtp {
-            packetTime = time.Now() // fallback to receiver system time
-        }
-        log.Printf("Write TS packet with pts=%d dts=%d time=%d [IDR-H264]", mpegPts, mpegDts, packetTime.UnixMilli())
-        return e.w.WriteH264WithTimestamp(e.track, mpegPts, mpegDts, true, au, packetTime)
-    } else {
-        log.Printf("Write TS packet with pts=%d dts=%d [H264]", mpegPts, mpegDts)
-        return e.w.WriteH264(e.track, mpegPts, mpegDts, false, au)
-    }
+	if isIDRFrame {
+		packetTime := ntp
+		if !hasNtp {
+			packetTime = time.Now() // fallback to receiver system time
+		}
+		log.Printf("Write TS packet with pts=%d dts=%d time=%d [IDR-H264]", mpegPts, mpegDts, packetTime.UnixMilli())
+		return e.w.WriteH264WithTimestamp(e.track, mpegPts, mpegDts, true, au, packetTime)
+	} else {
+		log.Printf("Write TS packet with pts=%d dts=%d [H264]", mpegPts, mpegDts)
+		return e.w.WriteH264(e.track, mpegPts, mpegDts, false, au)
+	}
 }
 
 // writeAACFrames writes AAC frames as ADTS+payload PES, one frame per PES.
 func (e *mpegtsMuxer) writeAACFrames(frames [][]byte, basePTS time.Duration) error {
-    if e.aTrack == nil || e.aacSampleHz <= 0 {
-        return nil
-    }
-    // AAC LC frame has 1024 samples
-    frameDur := time.Duration(float64(time.Second) * float64(1024) / float64(e.aacSampleHz))
-    pts := basePTS
-    for _, f := range frames {
-        adts := buildADTSHeader(e.aacSampleHz, e.aacChannels, len(f))
-        payload := append(adts, f...)
-        mpegPts := durationGoToMPEGTS(pts)
-        if err := e.w.writeAudio(e.aTrack, mpegPts, payload); err != nil {
-            return err
-        }
-        pts += frameDur
-    }
-    return nil
+	if e.aTrack == nil || e.aacSampleHz <= 0 {
+		return nil
+	}
+	// AAC LC frame has 1024 samples
+	frameDur := time.Duration(float64(time.Second) * float64(1024) / float64(e.aacSampleHz))
+	pts := basePTS
+	for _, f := range frames {
+		adts, err := buildADTSHeader(e.aacObjectType, e.aacSampleHz, e.aacChannels, len(f))
+		if err != nil {
+			return err
+		}
+		payload := append(adts, f...)
+		mpegPts := durationGoToMPEGTS(pts)
+		if err := e.w.writeAudio(e.aTrack, mpegPts, payload); err != nil {
+			return err
+		}
+		pts += frameDur
+	}
+	return nil
 }
 
-// buildADTSHeader builds a 7-byte ADTS header (no CRC) for a single AAC LC frame.
-func buildADTSHeader(sampleRate int, channels int, payloadLen int) []byte {
-    // Map sample rate to ADTS index
-    srTable := []int{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350}
-    srIndex := 4 // default 44100Hz
-    for i, v := range srTable {
-        if v == sampleRate {
-            srIndex = i
-            break
-        }
-    }
-    if channels < 1 {
-        channels = 2
-    }
-    profile := 1 // AAC LC (profile = objectType - 1), assume LC
-    frameLen := payloadLen + 7
+// buildADTSHeader builds a 7-byte ADTS header (no CRC) for a single AAC frame.
+func buildADTSHeader(objType int, sampleRate int, channels int, payloadLen int) ([]byte, error) {
+	// ADTS supports ObjectType 1..4 (profile 0..3)
+	if objType < 1 || objType > 4 {
+		return nil, fmt.Errorf("ADTS only supports ObjectType 1-4, got %d", objType)
+	}
+	profile := int(objType - 1)
 
-    hdr := make([]byte, 7)
-    // syncword 0xFFF
-    hdr[0] = 0xFF
-    hdr[1] = 0xF1 // 1111 0001: sync high + MPEG-4 + layer 00 + no CRC
-    hdr[2] = byte((profile&0x3)<<6 | (srIndex&0x0F)<<2 | (channels>>2)&0x1)
-    hdr[3] = byte((channels&0x3)<<6 | ((frameLen>>11)&0x3))
-    hdr[4] = byte((frameLen >> 3) & 0xFF)
-    hdr[5] = byte(((frameLen & 0x7) << 5) | 0x1F)
-    hdr[6] = 0xFC // 11111100: fullness and 0 raw blocks
-    return hdr
+	// Map sample rate to ADTS index
+	srTable := []int{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350}
+	srIndex := -1
+	for i, v := range srTable {
+		if v == sampleRate {
+			srIndex = i
+			break
+		}
+	}
+	if srIndex < 0 {
+		return nil, fmt.Errorf("invalid sample rate: %d", sampleRate)
+	}
+
+	// Channel configuration mapping
+	var chConf int
+	switch {
+	case channels >= 1 && channels <= 6:
+		chConf = channels
+	case channels == 8:
+		chConf = 7
+	default:
+		return nil, fmt.Errorf("invalid channel count (%d)", channels)
+	}
+
+	frameLen := payloadLen + 7
+	fullness := 0x07FF // same as FFmpeg
+
+	hdr := make([]byte, 7)
+	// syncword 0xFFF
+	hdr[0] = 0xFF
+	hdr[1] = 0xF1 // 1111 0001: sync high + MPEG-4 + layer 00 + no CRC
+	hdr[2] = uint8((profile&0x3)<<6 | (srIndex&0x0F)<<2 | ((chConf >> 2) & 0x01))
+	hdr[3] = uint8(((chConf & 0x03) << 6) | ((frameLen >> 11) & 0x03))
+	hdr[4] = uint8((frameLen >> 3) & 0xFF)
+	hdr[5] = uint8(((frameLen & 0x7) << 5) | ((fullness >> 6) & 0x1F))
+	hdr[6] = uint8((fullness & 0x3F) << 2) // + 0 raw blocks
+	return hdr, nil
 }
 
 // writeAudioPES writes raw audio PES payload (with ADTS already present) at given PTS.
 func (e *mpegtsMuxer) writeAudioPES(pesData []byte, pts time.Duration) error {
-    if e.aTrack == nil {
-        return nil
-    }
-    mpegPts := durationGoToMPEGTS(pts)
-    return e.w.writeAudio(e.aTrack, mpegPts, pesData)
+	if e.aTrack == nil {
+		return nil
+	}
+	mpegPts := durationGoToMPEGTS(pts)
+	return e.w.writeAudio(e.aTrack, mpegPts, pesData)
 }

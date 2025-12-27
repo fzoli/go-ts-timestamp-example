@@ -143,6 +143,7 @@ func main() {
 				if formaAAC != nil {
 					muxer.aacSampleHz = formaAAC.Config.SampleRate
 					muxer.aacChannels = formaAAC.Config.ChannelCount
+					muxer.aacObjectType = int(formaAAC.Config.Type)
 				}
 
 				var sps h265.SPS
@@ -208,6 +209,7 @@ func main() {
 				if formaAAC != nil {
 					muxer.aacSampleHz = formaAAC.Config.SampleRate
 					muxer.aacChannels = formaAAC.Config.ChannelCount
+					muxer.aacObjectType = int(formaAAC.Config.Type)
 				}
 
 				var sps h264.SPS
