@@ -28,6 +28,11 @@ type mpegtsMuxer struct {
     // DTS extractors
     dtsExtractor265 *h265.DTSExtractor
     dtsExtractor264 *h264.DTSExtractor
+
+    // audio
+    aTrack       *TsTrack
+    aacSampleHz  int
+    aacChannels  int
 }
 
 // initialize initializes a mpegtsMuxer.
@@ -37,7 +42,12 @@ func (e *mpegtsMuxer) initialize() error {
     } else {
         e.track = &TsTrack{Codec: &TsCodecH264{}}
     }
-    e.w = NewTsWriter(e.b, []*TsTrack{e.track})
+    tracks := []*TsTrack{e.track}
+    if e.aacSampleHz > 0 && e.aacChannels > 0 {
+        e.aTrack = &TsTrack{Codec: &TsCodecAAC{}}
+        tracks = append(tracks, e.aTrack)
+    }
+    e.w = NewTsWriter(e.b, tracks)
     return nil
 }
 
@@ -202,4 +212,62 @@ func (e *mpegtsMuxer) writeH264(au [][]byte, pts time.Duration, ntp time.Time, h
         log.Printf("Write TS packet with pts=%d dts=%d [H264]", mpegPts, mpegDts)
         return e.w.WriteH264(e.track, mpegPts, mpegDts, false, au)
     }
+}
+
+// writeAACFrames writes AAC frames as ADTS+payload PES, one frame per PES.
+func (e *mpegtsMuxer) writeAACFrames(frames [][]byte, basePTS time.Duration) error {
+    if e.aTrack == nil || e.aacSampleHz <= 0 {
+        return nil
+    }
+    // AAC LC frame has 1024 samples
+    frameDur := time.Duration(float64(time.Second) * float64(1024) / float64(e.aacSampleHz))
+    pts := basePTS
+    for _, f := range frames {
+        adts := buildADTSHeader(e.aacSampleHz, e.aacChannels, len(f))
+        payload := append(adts, f...)
+        mpegPts := durationGoToMPEGTS(pts)
+        if err := e.w.writeAudio(e.aTrack, mpegPts, payload); err != nil {
+            return err
+        }
+        pts += frameDur
+    }
+    return nil
+}
+
+// buildADTSHeader builds a 7-byte ADTS header (no CRC) for a single AAC LC frame.
+func buildADTSHeader(sampleRate int, channels int, payloadLen int) []byte {
+    // Map sample rate to ADTS index
+    srTable := []int{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350}
+    srIndex := 4 // default 44100Hz
+    for i, v := range srTable {
+        if v == sampleRate {
+            srIndex = i
+            break
+        }
+    }
+    if channels < 1 {
+        channels = 2
+    }
+    profile := 1 // AAC LC (profile = objectType - 1), assume LC
+    frameLen := payloadLen + 7
+
+    hdr := make([]byte, 7)
+    // syncword 0xFFF
+    hdr[0] = 0xFF
+    hdr[1] = 0xF1 // 1111 0001: sync high + MPEG-4 + layer 00 + no CRC
+    hdr[2] = byte((profile&0x3)<<6 | (srIndex&0x0F)<<2 | (channels>>2)&0x1)
+    hdr[3] = byte((channels&0x3)<<6 | ((frameLen>>11)&0x3))
+    hdr[4] = byte((frameLen >> 3) & 0xFF)
+    hdr[5] = byte(((frameLen & 0x7) << 5) | 0x1F)
+    hdr[6] = 0xFC // 11111100: fullness and 0 raw blocks
+    return hdr
+}
+
+// writeAudioPES writes raw audio PES payload (with ADTS already present) at given PTS.
+func (e *mpegtsMuxer) writeAudioPES(pesData []byte, pts time.Duration) error {
+    if e.aTrack == nil {
+        return nil
+    }
+    mpegPts := durationGoToMPEGTS(pts)
+    return e.w.writeAudio(e.aTrack, mpegPts, pesData)
 }

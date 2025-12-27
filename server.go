@@ -74,6 +74,8 @@ func handlePublish(conn srt.Conn) {
     var muxer *mpegtsMuxer
     // Track PID -> StreamType from PMT to decide codec without guessing
     pidStreamType := map[uint16]astits.StreamType{}
+    var videoPID uint16
+    var audioPID uint16
     for {
         data, err := demuxer.NextData()
         if err != nil {
@@ -84,15 +86,16 @@ func handlePublish(conn srt.Conn) {
         if data.PMT != nil {
             for _, es := range data.PMT.ElementaryStreams {
                 pidStreamType[es.ElementaryPID] = es.StreamType
+                if es.StreamType == astits.StreamTypeH264Video || es.StreamType == astits.StreamTypeH265Video {
+                    videoPID = es.ElementaryPID
+                }
+                if es.StreamType == astits.StreamTypeAACAudio {
+                    audioPID = es.ElementaryPID
+                }
             }
             continue
         }
         if data.PES == nil {
-            continue
-        }
-        au, ue := h264.AnnexBUnmarshal(data.PES.Data)
-        if ue != nil {
-            log.Println(ue)
             continue
         }
 		var ntp time.Time
@@ -107,7 +110,7 @@ func handlePublish(conn srt.Conn) {
 			hasNtp = true
 			log.Printf("Time: %s", ntp)
 		}
-        if data.FirstPacket != nil && data.FirstPacket.AdaptationField != nil && data.FirstPacket.AdaptationField.RandomAccessIndicator {
+        if data.FirstPacket != nil && data.FirstPacket.AdaptationField != nil && data.FirstPacket.AdaptationField.RandomAccessIndicator && data.PID == videoPID {
             if muxer != nil {
                 muxer.close()
             }
@@ -122,27 +125,32 @@ func handlePublish(conn srt.Conn) {
             var pps []byte
             isH265 := st == astits.StreamTypeH265Video
             isH264 := st == astits.StreamTypeH264Video
-            // Collect parameter sets from AU based on known codec
-            if isH265 {
-                for _, nalu := range au {
-                    t := h265.NALUType((nalu[0] >> 1) & 0b111111)
-                    switch t {
-                    case h265.NALUType_VPS_NUT:
-                        vps = nalu
-                    case h265.NALUType_SPS_NUT:
-                        sps = nalu
-                    case h265.NALUType_PPS_NUT:
-                        pps = nalu
-                    }
-                }
-            } else if isH264 {
-                for _, nalu := range au {
-                    t := h264.NALUType(nalu[0] & 0x1F)
-                    switch t {
-                    case h264.NALUTypeSPS:
-                        sps = nalu
-                    case h264.NALUTypePPS:
-                        pps = nalu
+            // Collect parameter sets from current video AU
+            if isH265 || isH264 {
+                au, ue := h264.AnnexBUnmarshal(data.PES.Data)
+                if ue == nil {
+                    if isH265 {
+                        for _, nalu := range au {
+                            t := h265.NALUType((nalu[0] >> 1) & 0b111111)
+                            switch t {
+                            case h265.NALUType_VPS_NUT:
+                                vps = nalu
+                            case h265.NALUType_SPS_NUT:
+                                sps = nalu
+                            case h265.NALUType_PPS_NUT:
+                                pps = nalu
+                            }
+                        }
+                    } else {
+                        for _, nalu := range au {
+                            t := h264.NALUType(nalu[0] & 0x1F)
+                            switch t {
+                            case h264.NALUTypeSPS:
+                                sps = nalu
+                            case h264.NALUTypePPS:
+                                pps = nalu
+                            }
+                        }
                     }
                 }
             }
@@ -179,22 +187,40 @@ func handlePublish(conn srt.Conn) {
             } else {
                 panic("unknown codec in AU")
             }
+            // Always include AAC track if present in incoming PMT
+            if audioPID != 0 {
+                // we don't need sample rate here since we'll pass through PES with ADTS
+                muxer.aacSampleHz = 48000 // placeholder to enable audio track; actual payload already has ADTS
+                muxer.aacChannels = 2
+            }
             err = muxer.initialize()
             if err != nil {
                 panic(err)
             }
         }
-        if muxer != nil && data.PES != nil && data.PES.Header.OptionalHeader != nil && data.PES.Header.OptionalHeader.PTS != nil && data.PES.Header.IsVideoStream() {
+        // Write video PES
+        if muxer != nil && data.PES != nil && data.PES.Header.OptionalHeader != nil && data.PES.Header.OptionalHeader.PTS != nil && data.PID == videoPID {
             pts := data.PES.Header.OptionalHeader.PTS.Duration()
-            var werr error
-            if muxer.isH265 {
-                werr = muxer.writeH265(au, pts, ntp, hasNtp)
-            } else {
-                werr = muxer.writeH264(au, pts, ntp, hasNtp)
+            // parse AnnexB AU for video only
+            au, ue := h264.AnnexBUnmarshal(data.PES.Data)
+            if ue == nil {
+                var werr error
+                st := pidStreamType[data.PID]
+                if st == astits.StreamTypeH265Video {
+                    werr = muxer.writeH265(au, pts, ntp, hasNtp)
+                } else {
+                    werr = muxer.writeH264(au, pts, ntp, hasNtp)
+                }
+                if werr != nil {
+                    log.Println(werr)
+                }
             }
-            if werr != nil {
-                log.Println(werr)
-            }
+            continue
+        }
+        // Write audio PES as-is into current segment
+        if muxer != nil && data.PES != nil && data.PES.Header.OptionalHeader != nil && data.PES.Header.OptionalHeader.PTS != nil && data.PID == audioPID {
+            pts := data.PES.Header.OptionalHeader.PTS.Duration()
+            _ = muxer.writeAudioPES(data.PES.Data, pts)
         }
     }
 }

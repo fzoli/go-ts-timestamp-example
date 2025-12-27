@@ -9,6 +9,9 @@ paths:
   h264src:
     runOnInit: ffmpeg -re -stream_loop -1 -i /config/video.h264.mp4 -c copy -f rtsp rtsp://localhost:8554/h264src
     runOnInitRestart: yes
+  h264src2:
+    runOnInit: ffmpeg -re -stream_loop -1 -i /config/video2.h264.mp4 -c copy -f rtsp rtsp://localhost:8554/h264src2
+    runOnInitRestart: yes
 
   # Destination stream. Published by Go app via SRT.
   # Play it via:

@@ -11,7 +11,8 @@ import (
 )
 
 const (
-	streamIDVideo = 224
+    streamIDVideo = 224
+    streamIDAudio = 192
 
 	// PCR is needed to read H265 tracks with VLC+VDPAU hardware encoder
 	// (and is probably needed by other combinations too)
@@ -91,6 +92,16 @@ func (c TsCodecH264) marshal(pid uint16) (*astits.PMTElementaryStream, error) {
     return &astits.PMTElementaryStream{
         ElementaryPID: pid,
         StreamType:    astits.StreamTypeH264Video,
+    }, nil
+}
+
+// TsCodecAAC is an AAC codec (ADTS).
+type TsCodecAAC struct{}
+
+func (c TsCodecAAC) marshal(pid uint16) (*astits.PMTElementaryStream, error) {
+    return &astits.PMTElementaryStream{
+        ElementaryPID: pid,
+        StreamType:    astits.StreamTypeAACAudio,
     }, nil
 }
 
@@ -292,4 +303,27 @@ func (w *TsWriter) writeVideo(
 		},
 	})
 	return err
+}
+
+// writeAudio writes an audio PES (PTS only) into MPEG-TS.
+func (w *TsWriter) writeAudio(
+    track *TsTrack,
+    pts int64,
+    data []byte,
+) error {
+    oh := &astits.PESOptionalHeader{MarkerBits: 2}
+    oh.PTSDTSIndicator = astits.PTSDTSIndicatorOnlyPTS
+    oh.PTS = &astits.ClockReference{Base: pts}
+
+    _, err := w.mux.WriteData(&astits.MuxerData{
+        PID: track.PID,
+        PES: &astits.PESData{
+            Header: &astits.PESHeader{
+                OptionalHeader: oh,
+                StreamID:       streamIDAudio,
+            },
+            Data: data,
+        },
+    })
+    return err
 }

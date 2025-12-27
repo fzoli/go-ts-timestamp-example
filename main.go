@@ -9,6 +9,7 @@ import (
 	"github.com/bluenviron/gortsplib/v4/pkg/format"
 	"github.com/bluenviron/gortsplib/v4/pkg/format/rtph264"
 	"github.com/bluenviron/gortsplib/v4/pkg/format/rtph265"
+	"github.com/bluenviron/gortsplib/v4/pkg/format/rtpmpeg4audio"
 	"github.com/bluenviron/mediacommon/pkg/codecs/h264"
 	"github.com/bluenviron/mediacommon/pkg/codecs/h265"
 	srt "github.com/datarhei/gosrt"
@@ -28,7 +29,7 @@ func main() {
 	}
 
 	// parse URL
-	u, err := base.ParseURL("rtsp://localhost:8554/h264src")
+	u, err := base.ParseURL("rtsp://localhost:8554/h264src2")
 	if err != nil {
 		panic(err)
 	}
@@ -49,6 +50,7 @@ func main() {
 	// find the H265 or H264 media and format
 	var forma265 *format.H265
 	var forma264 *format.H264
+	var formaAAC *format.MPEG4Audio
 	medi := desc.FindFormat(&forma265)
 	isH265 := true
 	if medi == nil {
@@ -58,6 +60,8 @@ func main() {
 		}
 		isH265 = false
 	}
+	// find audio (optional)
+	amedi := desc.FindFormat(&formaAAC)
 
 	// setup RTP decoder
 	var rtpDec interface{}
@@ -69,14 +73,29 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	// setup RTP decoder for audio if present
+	var aDec *rtpmpeg4audio.Decoder
+	if formaAAC != nil {
+		aDec, err = formaAAC.CreateDecoder()
+		if err != nil {
+			panic(err)
+		}
+	}
 
-	// setup a single media
+	// setup selected video media
 	_, err = c.Setup(desc.BaseURL, medi, 0, 0)
 	if err != nil {
 		panic(err)
 	}
+	// setup audio media (if present) before Play
+	if amedi != nil {
+		_, err = c.Setup(desc.BaseURL, amedi, 0, 0)
+		if err != nil {
+			panic(err)
+		}
+	}
 
-	// setup H265 -> MPEG-TS muxer
+	// setup TS muxer (created lazily)
 	var muxer *mpegtsMuxer
 
 	// called when a RTP packet arrives
@@ -120,6 +139,10 @@ func main() {
 					pps:    forma265.PPS,
 					isH265: true,
 					b:      bufio.NewWriterSize(conn, bufferSize),
+				}
+				if formaAAC != nil {
+					muxer.aacSampleHz = formaAAC.Config.SampleRate
+					muxer.aacChannels = formaAAC.Config.ChannelCount
 				}
 
 				var sps h265.SPS
@@ -182,6 +205,10 @@ func main() {
 					isH265: false,
 					b:      bufio.NewWriterSize(conn, bufferSize),
 				}
+				if formaAAC != nil {
+					muxer.aacSampleHz = formaAAC.Config.SampleRate
+					muxer.aacChannels = formaAAC.Config.ChannelCount
+				}
 
 				var sps h264.SPS
 				spsErr := sps.Unmarshal(forma264.SPS)
@@ -205,6 +232,25 @@ func main() {
 				panic(err)
 				return
 			}
+		})
+	}
+
+	// audio callback (optional)
+	if formaAAC != nil {
+		c.OnPacketRTP(amedi, formaAAC, func(pkt *rtp.Packet) {
+			pts, ok := c.PacketPTS(amedi, pkt)
+			if !ok {
+				return
+			}
+			aus, err := aDec.Decode(pkt)
+			if err != nil {
+				return
+			}
+			if muxer == nil {
+				// wait video init to include tracks and PCR
+				return
+			}
+			_ = muxer.writeAACFrames(aus, pts)
 		})
 	}
 
