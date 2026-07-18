@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"os"
@@ -17,6 +18,7 @@ type HLSSegment struct {
 	Filename        string
 	Duration        float64 // seconds
 	ProgramDateTime time.Time
+	InitURI         string // init segment this fragment was built against
 }
 
 // HLSSegmenter creates fMP4 fragments starting on keyframes (one GOP == one
@@ -36,6 +38,7 @@ type HLSSegmenter struct {
 	curStartPTS time.Duration
 	curLastPTS  time.Duration
 	curStartPDT time.Time
+	curInitURI  string
 
 	// codec params for (re)initialization
 	isH265        bool
@@ -47,10 +50,23 @@ type HLSSegmenter struct {
 	aacChannels   int
 	aacObjectType int
 
-	// fMP4 init segment, written once
-	initWritten  bool
-	videoTrackID int
-	audioTrackID int
+	// fMP4 init segment(s). Rewritten (as a new, versioned file) whenever
+	// the codec params above change compared to the last one written.
+	initWritten    bool
+	initVersion    int
+	currentInitURI string
+	videoTrackID   int
+	audioTrackID   int
+
+	// snapshot of the params the currently active init segment was built from
+	lastInitVPS           []byte
+	lastInitSPS           []byte
+	lastInitPPS           []byte
+	lastInitIsH265        bool
+	lastInitAACPresent    bool
+	lastInitAACSampleHz   int
+	lastInitAACChannels   int
+	lastInitAACObjectType int
 }
 
 func NewHLSSegmenter(dir string, window int) (*HLSSegmenter, error) {
@@ -96,14 +112,37 @@ func (h *HLSSegmenter) SetAudioParams(sampleHz, channels, objectType int) {
 	h.aacObjectType = objectType
 }
 
-// ensureInitLocked writes init.mp4 (ftyp+moov) the first time valid codec
-// parameters are available. Called with h.mu held.
-func (h *HLSSegmenter) ensureInitLocked() error {
-	if h.initWritten {
-		return nil
+// initParamsChangedLocked reports whether the codec params currently set
+// differ from the ones the active init segment was built from.
+func (h *HLSSegmenter) initParamsChangedLocked() bool {
+	if !h.initWritten {
+		return true
 	}
+	if !bytes.Equal(h.vps, h.lastInitVPS) ||
+		!bytes.Equal(h.sps, h.lastInitSPS) ||
+		!bytes.Equal(h.pps, h.lastInitPPS) ||
+		h.isH265 != h.lastInitIsH265 ||
+		h.aacPresent != h.lastInitAACPresent {
+		return true
+	}
+	if h.aacPresent &&
+		(h.aacSampleHz != h.lastInitAACSampleHz ||
+			h.aacChannels != h.lastInitAACChannels ||
+			h.aacObjectType != h.lastInitAACObjectType) {
+		return true
+	}
+	return false
+}
+
+// ensureInitLocked (re)writes a versioned init segment (ftyp+moov) whenever
+// valid codec params are available and differ from the currently active
+// init. Called with h.mu held.
+func (h *HLSSegmenter) ensureInitLocked() error {
 	if len(h.sps) == 0 || len(h.pps) == 0 || (h.isH265 && len(h.vps) == 0) {
 		return nil // wait for params
+	}
+	if !h.initParamsChangedLocked() {
+		return nil
 	}
 
 	h.videoTrackID = 1
@@ -133,15 +172,31 @@ func (h *HLSSegmenter) ensureInitLocked() error {
 	}
 
 	init := &fmp4.Init{Tracks: tracks}
-	f, err := os.Create(filepath.Join(h.dir, "init.mp4"))
+	filename := fmt.Sprintf("init-%d.mp4", h.initVersion)
+	f, err := os.Create(filepath.Join(h.dir, filename))
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	if err := init.Marshal(f); err != nil {
-		return err
+	marshalErr := init.Marshal(f)
+	closeErr := f.Close()
+	if marshalErr != nil {
+		return marshalErr
 	}
+	if closeErr != nil {
+		return closeErr
+	}
+
+	h.initVersion++
 	h.initWritten = true
+	h.currentInitURI = filename
+	h.lastInitVPS = append([]byte(nil), h.vps...)
+	h.lastInitSPS = append([]byte(nil), h.sps...)
+	h.lastInitPPS = append([]byte(nil), h.pps...)
+	h.lastInitIsH265 = h.isH265
+	h.lastInitAACPresent = h.aacPresent
+	h.lastInitAACSampleHz = h.aacSampleHz
+	h.lastInitAACChannels = h.aacChannels
+	h.lastInitAACObjectType = h.aacObjectType
 	return nil
 }
 
@@ -166,6 +221,7 @@ func (h *HLSSegmenter) StartSegment(firstPTS time.Duration, ntp time.Time) error
 	h.curSeq = seq
 	h.curStartPTS = firstPTS
 	h.curLastPTS = firstPTS
+	h.curInitURI = h.currentInitURI
 	if ntp.IsZero() {
 		ntp = time.Now()
 	}
@@ -232,13 +288,28 @@ func (h *HLSSegmenter) closeLocked(nextVideoDTSTicks *int64) error {
 		Filename:        filename,
 		Duration:        dur,
 		ProgramDateTime: h.curStartPDT,
+		InitURI:         h.curInitURI,
 	}
 	h.segments = append(h.segments, seg)
 	// slide window and delete old files
+	removedInitURIs := map[string]bool{}
 	for len(h.segments) > h.window {
 		old := h.segments[0]
 		h.segments = h.segments[1:]
 		_ = os.Remove(filepath.Join(h.dir, old.Filename))
+		removedInitURIs[old.InitURI] = true
+	}
+	// clean up init segments no longer referenced by any fragment in the window
+	if len(removedInitURIs) > 0 {
+		stillUsed := map[string]bool{h.currentInitURI: true}
+		for _, s := range h.segments {
+			stillUsed[s.InitURI] = true
+		}
+		for uri := range removedInitURIs {
+			if !stillUsed[uri] {
+				_ = os.Remove(filepath.Join(h.dir, uri))
+			}
+		}
 	}
 	return nil
 }
@@ -293,10 +364,15 @@ func (h *HLSSegmenter) Playlist() string {
 	b.WriteString(fmt.Sprintf("#EXT-X-TARGETDURATION:%d\n", target))
 	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
 	b.WriteString(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d\n", seq))
-	if h.initWritten {
-		b.WriteString(`#EXT-X-MAP:URI="init.mp4"` + "\n")
-	}
+	lastInitURI := ""
 	for _, s := range h.segments {
+		if s.InitURI != lastInitURI {
+			if lastInitURI != "" {
+				b.WriteString("#EXT-X-DISCONTINUITY\n")
+			}
+			b.WriteString(`#EXT-X-MAP:URI="` + s.InitURI + `"` + "\n")
+			lastInitURI = s.InitURI
+		}
 		if !s.ProgramDateTime.IsZero() {
 			b.WriteString("#EXT-X-PROGRAM-DATE-TIME:" + s.ProgramDateTime.UTC().Format(time.RFC3339Nano) + "\n")
 		}
