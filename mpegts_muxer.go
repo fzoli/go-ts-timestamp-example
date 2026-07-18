@@ -60,43 +60,7 @@ func (e *mpegtsMuxer) close() {
 
 // writeH265 writes a H265 access unit into MPEG-TS.
 func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, hasNtp bool) error {
-	var filteredAU [][]byte
-
-	isIFrame := false
-	isIDRFrame := false
-
-	for _, nalu := range au {
-		typ := h265.NALUType((nalu[0] >> 1) & 0b111111)
-		switch typ {
-		case h265.NALUType_VPS_NUT:
-			e.vps = nalu
-			continue
-
-		case h265.NALUType_SPS_NUT:
-			e.sps = nalu
-			continue
-
-		case h265.NALUType_PPS_NUT:
-			e.pps = nalu
-			continue
-
-		case h265.NALUType_AUD_NUT:
-			continue
-
-		case h265.NALUType_CRA_NUT:
-			// CRA is an I-frame, but not a random access point
-			isIFrame = true
-
-		case h265.NALUType_IDR_W_RADL, h265.NALUType_IDR_N_LP:
-			// IDR is both an I-frame and a random access point
-			isIFrame = true
-			isIDRFrame = true
-		}
-
-		filteredAU = append(filteredAU, nalu)
-	}
-
-	au = filteredAU
+	au, isIFrame, isIDRFrame := filterH265AU(au, &e.vps, &e.sps, &e.pps)
 
 	if au == nil {
 		log.Printf("Nil AU")
@@ -150,28 +114,7 @@ func (e *mpegtsMuxer) writeH265(au [][]byte, pts time.Duration, ntp time.Time, h
 
 // writeH264 writes a H264 access unit into MPEG-TS.
 func (e *mpegtsMuxer) writeH264(au [][]byte, pts time.Duration, ntp time.Time, hasNtp bool) error {
-	var filteredAU [][]byte
-
-	isIDRFrame := false
-
-	for _, nalu := range au {
-		typ := h264.NALUType(nalu[0] & 0x1F)
-		switch typ {
-		case h264.NALUTypeSPS:
-			e.sps = nalu
-			continue
-		case h264.NALUTypePPS:
-			e.pps = nalu
-			continue
-		case h264.NALUTypeAccessUnitDelimiter:
-			continue
-		case h264.NALUTypeIDR:
-			isIDRFrame = true
-		}
-		filteredAU = append(filteredAU, nalu)
-	}
-
-	au = filteredAU
+	au, isIDRFrame := filterH264AU(au, &e.sps, &e.pps)
 
 	if au == nil {
 		log.Printf("Nil AU")
@@ -239,6 +182,9 @@ func (e *mpegtsMuxer) writeAACFrames(frames [][]byte, basePTS time.Duration) err
 	return nil
 }
 
+// adtsSampleRateTable maps ADTS sampling_frequency_index to sample rate (Hz).
+var adtsSampleRateTable = []int{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350}
+
 // buildADTSHeader builds a 7-byte ADTS header (no CRC) for a single AAC frame.
 func buildADTSHeader(objType int, sampleRate int, channels int, payloadLen int) ([]byte, error) {
 	// ADTS supports ObjectType 1..4 (profile 0..3)
@@ -248,7 +194,7 @@ func buildADTSHeader(objType int, sampleRate int, channels int, payloadLen int) 
 	profile := int(objType - 1)
 
 	// Map sample rate to ADTS index
-	srTable := []int{96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350}
+	srTable := adtsSampleRateTable
 	srIndex := -1
 	for i, v := range srTable {
 		if v == sampleRate {
@@ -284,6 +230,32 @@ func buildADTSHeader(objType int, sampleRate int, channels int, payloadLen int) 
 	hdr[5] = uint8(((frameLen & 0x7) << 5) | ((fullness >> 6) & 0x1F))
 	hdr[6] = uint8((fullness & 0x3F) << 2) // + 0 raw blocks
 	return hdr, nil
+}
+
+// parseADTSHeader extracts objectType, sampleRate and channel count from a
+// 7-byte (no-CRC) ADTS header, mirroring buildADTSHeader's bit layout.
+func parseADTSHeader(hdr []byte) (objType, sampleRate, channels int, err error) {
+	if len(hdr) < 7 {
+		return 0, 0, 0, fmt.Errorf("ADTS header too short")
+	}
+
+	profile := (hdr[2] >> 6) & 0x3
+	objType = int(profile) + 1
+
+	srIndex := (hdr[2] >> 2) & 0x0F
+	if int(srIndex) >= len(adtsSampleRateTable) {
+		return 0, 0, 0, fmt.Errorf("invalid sample rate index: %d", srIndex)
+	}
+	sampleRate = adtsSampleRateTable[srIndex]
+
+	chConf := ((hdr[2] & 0x01) << 2) | ((hdr[3] >> 6) & 0x03)
+	if chConf == 7 {
+		channels = 8
+	} else {
+		channels = int(chConf)
+	}
+
+	return objType, sampleRate, channels, nil
 }
 
 // writeAudioPES writes raw audio PES payload (with ADTS already present) at given PTS.

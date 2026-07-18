@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"mime"
 	"net/http"
 	"time"
 
@@ -14,6 +15,9 @@ import (
 )
 
 func testServer() {
+	_ = mime.AddExtensionType(".m4s", "video/iso.segment")
+	_ = mime.AddExtensionType(".mp4", "video/mp4")
+
 	// Prepare HLS segmenter and HTTP server
 	hls, err := NewHLSSegmenter("hls", 6)
 	if err != nil {
@@ -107,6 +111,7 @@ func handlePublish(conn srt.Conn, hls *HLSSegmenter) {
 	pidStreamType := map[uint16]astits.StreamType{}
 	var videoPID uint16
 	var audioPID uint16
+	audioParamsSet := false
 	for {
 		data, err := demuxer.NextData()
 		if err != nil {
@@ -123,11 +128,6 @@ func handlePublish(conn srt.Conn, hls *HLSSegmenter) {
 				if es.StreamType == astits.StreamTypeAACAudio {
 					audioPID = es.ElementaryPID
 				}
-			}
-			// Configure audio track presence once we know it's there
-			if audioPID != 0 {
-				// HLS TS expects ADTS; upstream PES already contains ADTS, we just enable the track
-				hls.SetAudioParams(48000, 2, 2) // objectType=2 (AAC LC) as a safe default
 			}
 			continue
 		}
@@ -218,6 +218,15 @@ func handlePublish(conn srt.Conn, hls *HLSSegmenter) {
 		}
 		// Write audio PES as-is into current segment
 		if data.PES != nil && data.PES.Header.OptionalHeader != nil && data.PES.Header.OptionalHeader.PTS != nil && data.PID == audioPID {
+			if !audioParamsSet {
+				objType, sampleRate, channels, aerr := parseADTSHeader(data.PES.Data)
+				if aerr != nil {
+					log.Printf("ADTS parse error: %v", aerr)
+				} else {
+					hls.SetAudioParams(sampleRate, channels, objType)
+					audioParamsSet = true
+				}
+			}
 			pts := data.PES.Header.OptionalHeader.PTS.Duration()
 			_ = hls.WriteAudioPES(data.PES.Data, pts)
 		}
