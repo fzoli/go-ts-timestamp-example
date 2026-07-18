@@ -10,7 +10,11 @@ paths:
     runOnInit: ffmpeg -re -stream_loop -1 -i /config/video.h264.mp4 -c copy -f rtsp rtsp://localhost:8554/h264src
     runOnInitRestart: yes
   h264src2:
-    runOnInit: ffmpeg -re -stream_loop -1 -i /config/video2.h264.mp4 -c copy -f rtsp rtsp://localhost:8554/h264src2
+    # video2.h264.mp4 has an irregular keyframe interval (up to ~10s between
+    # IDRs), which makes GOP-aligned HLS segments balloon in size. Re-encode
+    # with a fixed 2s GOP (48 frames @ 24fps) instead of -c copy so segments
+    # stay small and consistent.
+    runOnInit: ffmpeg -re -stream_loop -1 -i /config/video2.h264.mp4 -c:v libx264 -g 48 -keyint_min 48 -sc_threshold 0 -c:a copy -f rtsp rtsp://localhost:8554/h264src2
     runOnInitRestart: yes
 
   # Destination stream. Published by Go app via SRT.
