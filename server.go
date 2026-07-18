@@ -42,7 +42,24 @@ func testServer() {
 const video = document.getElementById('v');
 const src = '/hls/stream.m3u8';
 if (video.canPlayType('application/vnd.apple.mpegurl')) { video.src = src; }
-else if (Hls.isSupported()) { const hls = new Hls({lowLatencyMode:false}); hls.loadSource(src); hls.attachMedia(video); }
+else if (Hls.isSupported()) {
+  // Segment durations here are irregular (1 fragment == 1 source GOP, and the
+  // test source has a very uneven keyframe interval), so EXT-X-TARGETDURATION
+  // swings a lot. hls.js's default live-edge buffering multiplies it by
+  // liveSyncDurationCount (3), which balloons with a large TARGETDURATION.
+  // Use fixed-second live sync/latency/buffer targets instead so playback
+  // start and catch-up don't depend on the biggest GOP currently in the window.
+  const hls = new Hls({
+    lowLatencyMode: false,
+    liveSyncDuration: 4,
+    liveMaxLatencyDuration: 15,
+    maxBufferLength: 8,
+    maxMaxBufferLength: 15,
+    backBufferLength: 4,
+  });
+  hls.loadSource(src);
+  hls.attachMedia(video);
+}
 else { document.body.insertAdjacentHTML('beforeend','<p>No HLS support</p>'); }
 </script></body></html>`))
 	})

@@ -28,9 +28,10 @@ type HLSSegmenter struct {
 	dir    string
 	window int
 
-	mu       sync.RWMutex
-	segments []HLSSegment
-	nextSeq  int
+	mu                sync.RWMutex
+	segments          []HLSSegment
+	nextSeq           int
+	targetDurationSec int // max segment duration ever seen, rounded up; per RFC 8216 this must never decrease
 
 	// current fragment state
 	curGop      *fmp4GopMuxer
@@ -291,6 +292,10 @@ func (h *HLSSegmenter) closeLocked(nextVideoDTSTicks *int64) error {
 		InitURI:         h.curInitURI,
 	}
 	h.segments = append(h.segments, seg)
+	// EXT-X-TARGETDURATION must never decrease over the playlist's lifetime (RFC 8216 4.3.3.1)
+	if d := int(math.Ceil(dur)); d > h.targetDurationSec {
+		h.targetDurationSec = d
+	}
 	// slide window and delete old files
 	removedInitURIs := map[string]bool{}
 	for len(h.segments) > h.window {
@@ -342,17 +347,10 @@ func (h *HLSSegmenter) WriteAudioPES(pes []byte, pts time.Duration) error {
 func (h *HLSSegmenter) Playlist() string {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	// compute target duration among available segments (at least 1)
-	maxDur := 1.0
-	if len(h.segments) > 0 {
-		maxDur = 0
-		for _, s := range h.segments {
-			if s.Duration > maxDur {
-				maxDur = s.Duration
-			}
-		}
+	target := h.targetDurationSec
+	if target < 1 {
+		target = 1
 	}
-	target := int(math.Ceil(maxDur))
 	seq := 0
 	if len(h.segments) > 0 {
 		seq = h.segments[0].Seq
